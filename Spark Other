@@ -1,0 +1,23 @@
+# In Spark, we have RDD’s ( resilient distributed datasets). 
+# If it’s a multi node cluster, data from the file is distributed in multiple nodes 
+  as a memory in collection of mutually exclusive subset of the data. 
+# RDD is a collection of objects or records in memory.
+
+## Defining the table schema and inserting the data  ##
+
+val sqlContext = new org.apache.spark.sql.SQLContext(sc)
+
+import sqlContext.createSchemaRDD
+
+// Note: Case classes in Scala 2.10 can support only up to 22 fields. To work around this limit,
+// you can use custom classes that implement the Product interface.
+case class Person(name: String, age: Int)
+
+// Create an RDD of Person objects and register it as a table.
+val people = sc.textFile("examples/src/main/resources/people.txt").map(_.split(",")).map(p => Person(p(0), p(1).trim.toInt))
+people.registerTempTable("people")
+
+// SQL statements can be run by using the sql methods provided by sqlContext.
+val teenagers = sqlContext.sql("SELECT name FROM people WHERE age >= 13 AND age <= 19")
+
+teenagers.map(t => "Name: " + t(0)).collect().foreach(println)
