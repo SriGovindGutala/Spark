@@ -1,0 +1,17 @@
+Before we start the hivecontext in spark
+
+cd /etc/hive/conf/
+ls –ltr
+-	hive-site.xml
+
+We need to copy or create a softlink for this file
+ln -s /etc/hive/conf/hive-site.xml /etc/spark/conf/hive-site.xml 
+if you don’t have permission then
+sudo ln -s /etc/hive/conf/hive-site.xml /etc/spark/conf/hive-site.xml 
+ls -ltr /etc/spark/conf/
+-	hive-site.xml -> /etc/hive/hive-site.xml
+view ls /etc/spark/conf/
+
+Testing
+sqlContext.sql("select * from sqoop_import.departments").collect().foreach(println)
+sqlContext.sql("select * from sqoop_import.departments").count()
