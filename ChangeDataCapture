@@ -1,0 +1,84 @@
+import sqlContext.implicits._
+
+// GENERATE MAPPING SCHEMA
+// GET DATA FROM CASSANDRA MAPPING_CONFIG TABLE
+val mapping_config = sqlContext.sql("select source_column_order, source_field, target_field, target_field_type from ods.mapping_config where tenant_id = 1 and entity = 'ACCOUNT_EAL' and source_column_order>0 ORDER BY source_column_order ASC")
+// Propably we can store this table in cache. We can cache it.
+mapping_config.show
+
+// CREATE NEW SCHEMA BASE ON ORDER COLUMNS
+
+val mySchemaArr = (mapping_config.map(t =>t.getAs[String]("target_field").toString)).toArray
+
+val sb = new StringBuilder()
+
+for (i<-mySchemaArr) {
+sb append i +" "}
+
+val schemaString = sb.mkString.trim
+
+
+// CREATE SCHEMA TO ETL PROCESS
+
+import org.apache.spark.sql.types.{StructType,StructField,StringType};
+
+val schema = StructType(schemaString.split(" ").map(fieldName => StructField(fieldName, StringType, true)))
+
+
+// LOAD DATA TO RDD. We can parallize them
+
+val account_file_rdd1=sc.textFile("file:///Users/srigovind/Downloads/account10.txt").map(o=>o.split("\\^",-1))
+
+val account_file_rdd2=sc.textFile("file:///Users/srigovind/Downloads/account5.txt").map(o=>o.split("\\^",-1))
+
+account_file_rdd1.count()
+account_file_rdd2.count()
+
+import org.apache.spark.sql.Row;
+
+val rowRDD1 = account_file_rdd1.map(p => Row(p(0),p(1),p(2),p(3),p(4),p(5),p(6),p(7),p(8),p(9),p(10),p(11),p(12),p(13),p(14),p(15),p(16),p(17),p(18),p(19)))
+val rowRDD2 = account_file_rdd2.map(p => Row(p(0),p(1),p(2),p(3),p(4),p(5),p(6),p(7),p(8),p(9),p(10),p(11),p(12),p(13),p(14),p(15),p(16),p(17),p(18),p(19)))
+
+val accountDataFrame1 = sqlContext.createDataFrame(rowRDD1, schema)
+val accountDataFrame2 = sqlContext.createDataFrame(rowRDD2, schema)
+
+// Register tables
+
+accountDataFrame1.registerTempTable("account1")
+accountDataFrame2.registerTempTable("account2")
+
+// Specify a table with diff
+
+val joinedTables_raw=sqlContext.sql("SELECT account1.SRC_UNQ_ID AS OLD_ID, account2.SRC_UNQ_ID, account2.ACCT_NM,account2.HSPTL_TYP_C, account2.ACCT_STYP_CD,account2.ACCT_STAT, account2.ACCNT_ATTRB_3,account2.ACCNT_ATTRB_4,account2.BEDS_C,account2.ACCNT_ATTRB_6,account2.ACCNT_ATTRB_5,account2.PRFSNL_STATUS,account2.ACCNT_ATTRB_7,account2.ACCNT_ATTRB_9,account2.ACCNT_ATTRB_8,account2.ACCNT_ATTRB_10,account2.ACCNT_ATTRB_11,account2.ACCNT_ATTRB_12,account2.ACCNT_ATTRB_2,account2.ACCNT_ATTRB_1,account2.PHARMA_CRITICAL_FLG FROM account1 FULL OUTER JOIN account2 ON account1.SRC_UNQ_ID=account2.SRC_UNQ_ID")
+
+// For deletion purpose
+
+val joinedTables_raw_del=sqlContext.sql("SELECT account1.SRC_UNQ_ID AS OLD_ID, account2.SRC_UNQ_ID, account1.ACCT_NM,account1.HSPTL_TYP_C, account1.ACCT_STYP_CD,account1.ACCT_STAT, account2.ACCNT_ATTRB_3, account1.ACCNT_ATTRB_1,account1.ACCNT_ATTRB_4,account1.BEDS_C,account1.ACCNT_ATTRB_6,account1.ACCNT_ATTRB_5,account1.PRFSNL_STATUS,account1.ACCNT_ATTRB_7,account1.ACCNT_ATTRB_9, account1.ACCNT_ATTRB_8,account1.ACCNT_ATTRB_10,account1.ACCNT_ATTRB_11,account1.ACCNT_ATTRB_12,account1.ACCNT_ATTRB_2,account1.ACCNT_ATTRB_1,account1.PHARMA_CRITICAL_FLG FROM account1 FULL OUTER JOIN account2 ON account1.SRC_UNQ_ID=account2.SRC_UNQ_ID")
+
+joinedTables_raw.registerTempTable("account_diff")
+
+import org.apache.spark.sql.functions._
+
+val s1_to_be_inserted_raw = joinedTables_raw.filter(col("OLD_ID").isNull)
+println("How many rows should be inserted:"+s1_to_be_inserted_raw.count)
+
+val s2_to_be_updated_raw = (joinedTables_raw.filter(col("OLD_ID").isNotNull)).filter(col("SRC_UNQ_ID").isNotNull)
+println("How many rows should be inserted:"+s2_to_be_updated_raw.count)
+
+val s3_to_be_deleted_raw = joinedTables_raw_del.filter(col("SRC_UNQ_ID").isNull)
+println("How many rows should be deleted: "+s3_to_be_deleted_raw.count)
+
+    s1_to_be_inserted_raw.registerTempTable("account_insert")
+    s2_to_be_updated_raw.registerTempTable("account_update")
+    s3_to_be_deleted_raw.registerTempTable("account_delete")
+
+// SAVE DATA TO CASSANDRA TABLE
+
+val t_insert_account = sqlContext.sql("select src_unq_id as accnt_id, 1 as tenant_id, src_unq_id, acct_nm, hsptl_typ_c, acct_styp_cd, acct_stat, accnt_attrb_3, accnt_attrb_4, CAST(beds_c AS int) as beds_c, accnt_attrb_6,accnt_attrb_5, prfsnl_status, accnt_attrb_7, accnt_attrb_9, accnt_attrb_8, accnt_attrb_10, accnt_attrb_11, accnt_attrb_12, accnt_attrb_2, accnt_attrb_1, pharma_critical_flg, 'active' as active_inactive from account_insert")
+t_insert_account.write.format("org.apache.spark.sql.cassandra").options(Map( "keyspace" -> "ods", "table" -> "d_account" )).mode("append").save()
+
+val t_update_account = sqlContext.sql("select src_unq_id as accnt_id, 1 as tenant_id, src_unq_id, acct_nm, hsptl_typ_c, acct_styp_cd, acct_stat, accnt_attrb_3, accnt_attrb_4, CAST(beds_c AS int) as beds_c, accnt_attrb_6,accnt_attrb_5, prfsnl_status, accnt_attrb_7, accnt_attrb_9, accnt_attrb_8, accnt_attrb_10, accnt_attrb_11, accnt_attrb_12, accnt_attrb_2, accnt_attrb_1, pharma_critical_flg, 'active' as active_inactive from account_update")
+t_update_account.write.format("org.apache.spark.sql.cassandra").options(Map( "keyspace" -> "ods", "table" -> "d_account" )).mode("append").save()
+
+val t_delete_account = sqlContext.sql("select OLD_ID as accnt_id, 1 as tenant_id, src_unq_id, acct_nm, hsptl_typ_c,acct_styp_cd, acct_stat, accnt_attrb_3, accnt_attrb_4, CAST(beds_c AS int) as beds_c, accnt_attrb_6,accnt_attrb_5, prfsnl_status, accnt_attrb_7, accnt_attrb_9, accnt_attrb_8, accnt_attrb_10, accnt_attrb_11, accnt_attrb_12, accnt_attrb_2, accnt_attrb_1, pharma_critical_flg, 'inactive' as active_inactive from account_delete")
+t_delete_account.write.format("org.apache.spark.sql.cassandra").options(Map( "keyspace" -> "ods", "table" -> "d_account" )).mode("append").save()
